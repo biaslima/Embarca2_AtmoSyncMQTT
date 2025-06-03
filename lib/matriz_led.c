@@ -60,11 +60,11 @@ void update_leds(PIO pio_inst, uint sm_num) {
 }
 
 //Cria animação aleatória para modo festa
-void animacao_festa_loop() {
+void animacao_festa_loop(MQTT_CLIENT_DATA_T *state) {
     static uint32_t last_time = 0;
     uint32_t current_time = to_ms_since_boot(get_absolute_time());
 
-    if (!leds_ativos || modo_atual != MODO_FESTA) return;
+    if (!leds_ativos || state->modo_atual != MODO_FESTA) return;
 
     // Atualiza a cada 300ms
     if (current_time - last_time >= 300) {
@@ -103,14 +103,14 @@ void exibir_padrao(uint8_t padrao) {
 }
 
 //Alterna a matriz de LEDs
-void alternar_leds() {
+void alternar_leds(MQTT_CLIENT_DATA_T *state) {
     leds_ativos = !leds_ativos;
 
     if (leds_ativos) {
         extern ModoSistema modo_atual; 
         
         uint8_t padrao;
-        switch (modo_atual) {
+        switch (state->modo_atual) {
             case MODO_HOME:
                 padrao = 0;
                 break;

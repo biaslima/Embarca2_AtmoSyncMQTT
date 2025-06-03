@@ -2,6 +2,7 @@
 #define MATRIZ_LED_H
 
 #include "hardware/pio.h"
+#include "setup.h"
 
 
 #define NUM_LEDS 25

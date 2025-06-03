@@ -1,24 +1,15 @@
 #ifndef MODOS_H
 #define MODOS_H
 
-// Tipos de modo do sistema
-typedef enum {
-    MODO_HOME,
-    MODO_FESTA,
-    MODO_SEGURANCA,
-} ModoSistema;
-
-extern ModoSistema modo_atual;
+#include "setup.h" 
 
 // Protótipos das funções
-void set_modo(ModoSistema novo_modo);
-void atualiza_display(void);
-void atualiza_matriz_leds(void);
-void atualiza_buzzer(void);
-void atualiza_rgb_led(void);
-void executar_modulo_modos(void);
+void set_modo(MQTT_CLIENT_DATA_T *state, ModoSistema novo_modo);
+void atualiza_display(MQTT_CLIENT_DATA_T *state);
+void atualiza_matriz_leds(MQTT_CLIENT_DATA_T *state);
+void atualiza_buzzer(MQTT_CLIENT_DATA_T *state);
+void atualiza_rgb_led(MQTT_CLIENT_DATA_T *state);
+void executar_modulo_modos(MQTT_CLIENT_DATA_T *state);
 bool detect_loud_noise(void);
-void atualizar_tempo_simulado();
-
 
 #endif

@@ -9,34 +9,31 @@
 #include <string.h>              
 #include <stdlib.h>   
 
-// Definição da variável global declarada como extern em modos.h
 ssd1306_t ssd;
-ModoSistema modo_atual = MODO_HOME;
 
 
 //Executa os loops do modos
-void executar_modulo_modos() {
-    if (modo_atual == MODO_SEGURANCA && detect_loud_noise()) {
-        if (!alarme_ativo) {
-            printf("Alarme ativado por ruído!\n");
-            tocar_alarme();
-            atualiza_display();  
-            atualiza_matriz_leds();  
-        }
+void executar_modulo_modos(MQTT_CLIENT_DATA_T *state) {
+    if (state->modo_atual == MODO_SEGURANCA && !state->alarme_ativo && detect_loud_noise()) {
+        printf("Alarme ativado por ruído!\n");
+        state->alarme_ativo = true;
+        
+        atualiza_display(state);  // Para resposta imediata
+        atualiza_matriz_leds(state); // Para resposta imediata
+        publish_alarm_status(state); // Publicar que há um intruso
     }
+    alarme_loop(state);         
+    animacao_festa_loop(state); 
+    musica_festa_loop(state);   
 
-    alarme_loop();    
-    animacao_festa_loop(); 
-    musica_festa_loop();   
-    
     sleep_ms(100);
 }
 
 //Define o modo atual no sistema
-void set_modo(ModoSistema novo_modo) { 
-    modo_atual = novo_modo;
+void set_modo(MQTT_CLIENT_DATA_T *state, ModoSistema novo_modo) { 
+    state->modo_atual = novo_modo;
 
-    switch (modo_atual) {
+    switch (state->modo_atual) {
         case MODO_HOME:
             printf("Modo atual: Home\n");
             break;
@@ -47,57 +44,52 @@ void set_modo(ModoSistema novo_modo) {
             printf("Modo atual: Segurança\n");
             break;
     }
-    atualiza_display();
-    atualiza_matriz_leds();
-    atualiza_buzzer();
-    atualiza_rgb_led();
+
+    atualiza_display(state);
+    atualiza_matriz_leds(state);
+    atualiza_buzzer(state); 
+    atualiza_rgb_led(state); 
+
+    publish_mode_status(state);
+    publish_alarm_status(state);
+
 }
 
 // ===========Funções de periféricos=================
 //Atualiza o buzzer de acordo com o modo
-void atualiza_buzzer() {
-    switch (modo_atual) {
-        case MODO_HOME:
-        case MODO_SEGURANCA:
-            if (alarme_ativo) {
-                tocar_alarme();
-            } else {
-                buzzer_desliga(BUZZER_PIN);
-            }
-            break;
-        case MODO_FESTA:
+void atualiza_buzzer(MQTT_CLIENT_DATA_T *state) {
+    if (state-> alarme_ativo) {
+    } else {
+        buzzer_desliga(BUZZER_PIN);
+        if (state->modo_atual == MODO_FESTA) {
             tocar_frequencia(440, 150);
-            break;
+        }
     }
 }
 
 //Atualiza o display de acordo com o modo
-void atualiza_display() {
+void atualiza_display(MQTT_CLIENT_DATA_T *state) {
     ssd1306_fill(&ssd, false);
 
     char buffer_data[16];
     char buffer_hora[16];
-
     // Se o modo for Segurança com alarme, mostrar "INTRUSO"
-    if (modo_atual == MODO_SEGURANCA && alarme_ativo) {
-        ssd1306_draw_string(&ssd, "!!! INTRUSO !!!", 8, 30);
+    if (state->alarme_ativo) {
+        ssd1306_draw_string(&ssd, "!!! INTRUSO !!!", 5, 30);
         ssd1306_send_data(&ssd);
         return;
     }
 
-    ssd1306_rect(&ssd, 0, 0, 128, 64, true, false);
-    ssd1306_hline(&ssd, 1, 126, 10, true);
-
     // Nome do modo
-    switch (modo_atual) {
+    switch (state->modo_atual) {
         case MODO_HOME:
-            ssd1306_draw_string(&ssd, "Modo: Home", 5, 2);
+            ssd1306_draw_string(&ssd, "Modo: Home", 28, 24);
             break;
         case MODO_FESTA:
-            ssd1306_draw_string(&ssd, "Modo: Festa", 5, 2);
+            ssd1306_draw_string(&ssd, "Modo: Festa", 28, 20);
             break;
         case MODO_SEGURANCA:
-            ssd1306_draw_string(&ssd, "Modo: Seguranca", 5, 2);
+            ssd1306_draw_string(&ssd, "Modo: Seguranca", 28, 2);
             break;
         default:
             break;
@@ -107,8 +99,8 @@ void atualiza_display() {
 }
 
 //Atualizar matriz de LED de acordo com o modo
-void atualiza_matriz_leds() {
-    switch (modo_atual) {
+void atualiza_matriz_leds(MQTT_CLIENT_DATA_T *state) {
+    switch (state->modo_atual) {
         case MODO_HOME:
             exibir_padrao(0);
             break;
@@ -116,7 +108,7 @@ void atualiza_matriz_leds() {
             exibir_padrao(1); 
             break;
         case MODO_SEGURANCA:
-            if (alarme_ativo) {
+            if (state->alarme_ativo) {
                 piscar_matriz_intruso(); 
             } else {
             clear_matrix(pio0, 0);
@@ -127,8 +119,8 @@ void atualiza_matriz_leds() {
 }
 
 //Atualizar LED RGB de acordo com modo
-void atualiza_rgb_led() {
-    switch (modo_atual) {
+void atualiza_rgb_led(MQTT_CLIENT_DATA_T *state) {
+    switch (state->modo_atual) {
         case MODO_HOME:
             gpio_put(LED_GREEN_PIN, true);
             gpio_put(LED_RED_PIN, false);
@@ -161,6 +153,5 @@ bool detect_loud_noise(void) {
         sleep_us(100);
     }
 
-    printf("Mic: Max %d | Avg %d\n", max_value, sum / MIC_SAMPLES);
     return (max_value > MIC_THRESHOLD);
 }

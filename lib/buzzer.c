@@ -4,12 +4,10 @@
 #include <string.h>              
 #include <stdlib.h>   
 
-
 //Variaveis globais
 static int buzzer_pin;
 static uint slice_num;
 static uint channel;
-bool alarme_ativo = false;
 
 //Notas para musiquinha
 #define NOTE_C4  261
@@ -71,30 +69,16 @@ void tocar_frequencia(int frequencia, int duracao_ms) {
     pwm_set_enabled(slice_num, false);
 }
 
-//Altera o estado da variável de alarme para true
-void tocar_alarme(){
-    alarme_ativo = true;
-}
-
-//Altera o estado da variável de alarme para false
-void desligar_alarme() {
-    alarme_ativo = false;
-    buzzer_desliga(buzzer_pin); 
-}
 
 //Deixa o som do alarme intermitente
-void alarme_loop() {
+void alarme_loop(MQTT_CLIENT_DATA_T *state) {
     static uint32_t ultima_execucao = 0;
     uint32_t agora = to_ms_since_boot(get_absolute_time());
 
-    if (!alarme_ativo) return;
+    if (!state->alarme_ativo) return;
 
     if (agora - ultima_execucao >= 600) {
         tocar_frequencia(600, 600);
-        if (modo_atual == MODO_SEGURANCA) {
-            atualiza_display();
-            atualiza_matriz_leds();
-        }
         ultima_execucao = agora;
     }
 }
@@ -113,12 +97,12 @@ void buzzer_para_nota() {
 }
 
 //Constrói a música em looping
-void musica_festa_loop() {
+void musica_festa_loop(MQTT_CLIENT_DATA_T *state) {
     static int nota_atual = 0;
     static uint32_t tempo_inicio = 0;
     static bool tocando = false;
 
-    if (modo_atual != MODO_FESTA) {
+    if (state->modo_atual != MODO_FESTA) {
         buzzer_para_nota(); 
         nota_atual = 0;
         tocando = false;

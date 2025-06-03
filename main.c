@@ -6,23 +6,13 @@
 #include "hardware/irq.h"           
 #include "hardware/adc.h"           
 
-#include "lwip/apps/mqtt.h"         
-#include "lwip/apps/mqtt_priv.h"    
-#include "lwip/dns.h"               
-#include "lwip/altcp_tls.h"    
-
 #include "setup.h"
 
 #define WIFI_SSID "BRENO-2G"                  
 #define WIFI_PASSWORD "991773729"      
-#define MQTT_SERVER "192.168.0.139"                
+#define MQTT_SERVER "192.168.0.102"                
 #define MQTT_USERNAME "bia"     
 #define MQTT_PASSWORD "bibi123698745"     
-
-// Definição da escala de temperatura
-#ifndef TEMPERATURE_UNITS
-#define TEMPERATURE_UNITS 'C' // Set to 'F' for Fahrenheit
-#endif
 
 #ifndef MQTT_SERVER
 #error Need to define MQTT_SERVER
@@ -32,30 +22,6 @@
 #ifdef MQTT_CERT_INC
 #include MQTT_CERT_INC
 #endif
-
-#ifndef MQTT_TOPIC_LEN
-#define MQTT_TOPIC_LEN 100
-#endif
-
-
-//Dados do cliente MQTT
-typedef struct {
-    mqtt_client_t* mqtt_client_inst;
-    struct mqtt_connect_client_info_t mqtt_client_info;
-    char data[MQTT_OUTPUT_RINGBUF_SIZE];
-    char topic[MQTT_TOPIC_LEN];
-    uint32_t len;
-    ip_addr_t mqtt_server_address;
-    bool connect_done;
-    int subscribe_count;
-    bool stop_client;
-
-    ModoSistema modo_atual;       // Standby, Festa ou Segurança
-    bool alarme_ativo;       // Alarme ativo ou não   
-
-    char nome_comodo[20];
-} MQTT_CLIENT_DATA_T;
-
 
 #ifndef DEBUG_printf
 #ifndef NDEBUG
@@ -72,9 +38,6 @@ typedef struct {
 #ifndef ERROR_printf
 #define ERROR_printf printf
 #endif
-
-// Temporização da coleta de temperatura - how often to measure our temperature
-#define TEMP_WORKER_TIME_S 10
 
 // Manter o programa ativo - keep alive in seconds
 #define MQTT_KEEP_ALIVE_S 60
@@ -101,14 +64,12 @@ typedef struct {
 #define MQTT_UNIQUE_TOPIC 0
 #endif
 
-//Leitura de temperatura do microcotrolador
-static float read_onboard_temperature(const char unit);
+static MQTT_CLIENT_DATA_T state;
+
 // Requisição para publicar
 static void pub_request_cb(__unused void *arg, err_t err);
 // Topico MQTT
 static const char *full_topic(MQTT_CLIENT_DATA_T *state, const char *name);
-// Publicar temperatura
-static void publish_temperature(MQTT_CLIENT_DATA_T *state);
 // Requisição de Assinatura - subscribe
 static void sub_request_cb(void *arg, err_t err);
 // Requisição para encerrar a assinatura
@@ -119,15 +80,13 @@ static void sub_unsub_topics(MQTT_CLIENT_DATA_T* state, bool sub);
 static void mqtt_incoming_data_cb(void *arg, const u8_t *data, u16_t len, u8_t flags);
 // Dados de entrada publicados
 static void mqtt_incoming_publish_cb(void *arg, const char *topic, u32_t tot_len);
-// Publicar temperatura
-static void temperature_worker_fn(async_context_t *context, async_at_time_worker_t *worker);
-static async_at_time_worker_t temperature_worker = { .do_work = temperature_worker_fn };
 // Conexão MQTT
 static void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection_status_t status);
 // Inicializar o cliente MQTT
 static void start_client(MQTT_CLIENT_DATA_T *state);
 // Call back com o resultado do DNS
 static void dns_found(const char *hostname, const ip_addr_t *ipaddr, void *arg);
+
 
 int main(void) {
 
@@ -146,12 +105,8 @@ int main(void) {
     adc_set_temp_sensor_enabled(true);
     adc_select_input(4);
 
-    // Cria registro com os dados do cliente
-    static MQTT_CLIENT_DATA_T state;
-
     state.modo_atual = MODO_HOME;
     state.alarme_ativo = false;
-    strncpy(state.nome_comodo, "sala", sizeof(state.nome_comodo));
 
     // Inicializa a arquitetura do cyw43
     if (cyw43_arch_init()) {
@@ -224,11 +179,11 @@ int main(void) {
         panic("dns request failed");
     }
 
-    set_modo(MODO_HOME);
+    set_modo(&state, MODO_HOME);
     // Loop condicionado a conexão mqtt
     while (!state.connect_done || mqtt_client_is_connected(state.mqtt_client_inst)) {
         cyw43_arch_poll();
-        executar_modulo_modos();
+        executar_modulo_modos(&state);
         cyw43_arch_wait_for_work_until(make_timeout_time_ms(10000));
     }
 
@@ -236,25 +191,6 @@ int main(void) {
     return 0;
 }
 
-/* References for this implementation:
- * raspberry-pi-pico-c-sdk.pdf, Section '4.1.1. hardware_adc'
- * pico-examples/adc/adc_console/adc_console.c */
-static float read_onboard_temperature(const char unit) {
-
-    /* 12-bit conversion, assume max value == ADC_VREF == 3.3 V */
-    const float conversionFactor = 3.3f / (1 << 12);
-
-    float adc = (float)adc_read() * conversionFactor;
-    float tempC = 27.0f - (adc - 0.706f) / 0.001721f;
-
-    if (unit == 'C' || unit != 'F') {
-        return tempC;
-    } else if (unit == 'F') {
-        return tempC * 9 / 5 + 32;
-    }
-
-    return -1.0f;
-}
 
 // Requisição para publicar
 static void pub_request_cb(__unused void *arg, err_t err) {
@@ -272,33 +208,6 @@ static const char *full_topic(MQTT_CLIENT_DATA_T *state, const char *name) {
 #else
     return name;
 #endif
-}
-
-// Controle do LED 
-static void control_led(MQTT_CLIENT_DATA_T *state, bool on) {
-    // Publish state on /state topic and on/off led board
-    const char* message = on ? "On" : "Off";
-    if (on)
-        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
-    else
-        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
-
-    mqtt_publish(state->mqtt_client_inst, full_topic(state, "/led/state"), message, strlen(message), MQTT_PUBLISH_QOS, MQTT_PUBLISH_RETAIN, pub_request_cb, state);
-}
-
-// Publicar temperatura
-static void publish_temperature(MQTT_CLIENT_DATA_T *state) {
-    static float old_temperature;
-    const char *temperature_key = full_topic(state, "/temperature");
-    float temperature = read_onboard_temperature(TEMPERATURE_UNITS);
-    if (temperature != old_temperature) {
-        old_temperature = temperature;
-        // Publish temperature on /temperature topic
-        char temp_str[16];
-        snprintf(temp_str, sizeof(temp_str), "%.2f", temperature);
-        INFO_printf("Publishing %s to %s\n", temp_str, temperature_key);
-        mqtt_publish(state->mqtt_client_inst, temperature_key, temp_str, strlen(temp_str), MQTT_PUBLISH_QOS, MQTT_PUBLISH_RETAIN, pub_request_cb, state);
-    }
 }
 
 // Requisição de Assinatura - subscribe
@@ -325,66 +234,58 @@ static void unsub_request_cb(void *arg, err_t err) {
     }
 }
 
-// Tópicos de assinatura
+// Tópicos de assinatura - SIMPLIFICADOS
 static void sub_unsub_topics(MQTT_CLIENT_DATA_T* state, bool sub) {
     mqtt_request_cb_t cb = sub ? sub_request_cb : unsub_request_cb;
 
-    char topico_modo[64];
-    snprintf(topico_modo, sizeof(topico_modo), "/comodo/%s/modo", state->nome_comodo);
-    mqtt_sub_unsub(state->mqtt_client_inst, topico_modo, MQTT_SUBSCRIBE_QOS, cb, state, sub);
 
-    mqtt_sub_unsub(state->mqtt_client_inst, "/comodo/+/alarme", MQTT_SUBSCRIBE_QOS, cb, state, sub);
-
+    mqtt_sub_unsub(state->mqtt_client_inst, "/modo", MQTT_SUBSCRIBE_QOS, cb, state, sub);
+    mqtt_sub_unsub(state->mqtt_client_inst, "/alarme", MQTT_SUBSCRIBE_QOS, cb, state, sub);
     mqtt_sub_unsub(state->mqtt_client_inst, full_topic(state, "/print"), MQTT_SUBSCRIBE_QOS, cb, state, sub);
     mqtt_sub_unsub(state->mqtt_client_inst, full_topic(state, "/ping"), MQTT_SUBSCRIBE_QOS, cb, state, sub);
     mqtt_sub_unsub(state->mqtt_client_inst, full_topic(state, "/exit"), MQTT_SUBSCRIBE_QOS, cb, state, sub);
 }
 
-// Dados de entrada MQTT
+// Dados de entrada MQTT - SIMPLIFICADOS
 static void mqtt_incoming_data_cb(void *arg, const u8_t *data, u16_t len, u8_t flags) {
     MQTT_CLIENT_DATA_T* state = (MQTT_CLIENT_DATA_T*)arg;
-#if MQTT_UNIQUE_TOPIC
-    const char *basic_topic = state->topic + strlen(state->mqtt_client_info.client_id) + 1;
-#else
-    const char *basic_topic = state->topic;
-#endif
-    strncpy(state->data, (const char *)data, len);
-    state->len = len;
-    state->data[len] = '\0';
 
-    printf("Recebido de %s: %s\n", state->topic, state->data);
-    DEBUG_printf("Tópico: %s | Mensagem: %s\n", basic_topic, state->data);
+    // Garantir que o payload seja uma string válida
+    char msg[len + 1];
+    memcpy(msg, data, len);
+    msg[len] = '\0'; // Null terminator
 
-    // Exemplo: /comodo/sala/modo
-    if (strncmp(basic_topic, "/comodo/", 8) == 0) {
-        char comodo[16], comando[16];
-        int capturados = sscanf(basic_topic, "/comodo/%15[^/]/%15s", comodo, comando);
-        if (capturados == 2 && strcmp(comodo, state->nome_comodo) == 0) {
-            if (strcmp(comando, "modo") == 0) {
-                if (strcmp(state->data, "HOME") == 0) {
-                    set_modo(MODO_HOME);
-                } else if (strcmp(state->data, "festa") == 0) {
-                    set_modo(MODO_FESTA);
-                } else if (strcmp(state->data, "seguranca") == 0) {
-                    set_modo(MODO_SEGURANCA);
-                }
-            } else if (strcmp(comando, "alarme") == 0) {
-                if (modo_atual == MODO_SEGURANCA && !alarme_ativo) {
-                    alarme_ativo = true; 
-                }
-            }
+    INFO_printf("Mensagem recebida no topico: %s, Payload: %s\n", state->topic, msg);
+
+    // Lógica para o tópico de ALARME
+    if (strcmp(state->topic, full_topic(state, "/alarme")) == 0) {
+        if (strncmp(msg, "desativar", len) == 0 && state->alarme_ativo) {
+            state->alarme_ativo = false; 
+
+            INFO_printf(">> Comando MQTT: Alarme DESATIVADO\n");
+
+            buzzer_desliga(BUZZER_PIN); // Silencia o buzzer imediatamente
+            atualiza_display(state);
+            atualiza_matriz_leds(state); 
+            publish_alarm_status(state);
+        } else {
+            INFO_printf(">> Comando /alarme ignorado (já no estado desejado, ou não permitido)\n");
         }
-    } else if (strcmp(basic_topic, "/print") == 0) {
-        INFO_printf("%.*s\n", len, data);
-    } else if (strcmp(basic_topic, "/ping") == 0) {
-        char buf[11];
-        snprintf(buf, sizeof(buf), "%u", to_ms_since_boot(get_absolute_time()) / 1000);
-        mqtt_publish(state->mqtt_client_inst, full_topic(state, "/uptime"), buf, strlen(buf), MQTT_PUBLISH_QOS, MQTT_PUBLISH_RETAIN, pub_request_cb, state);
-    } else if (strcmp(basic_topic, "/exit") == 0) {
-        state->stop_client = true;
-        sub_unsub_topics(state, false);
+    } else if (strcmp(state->topic, full_topic(state, "/modo")) == 0) {
+        ModoSistema novo_modo_solicitado = state->modo_atual;
+        if (strcmp(msg, "home") == 0) novo_modo_solicitado = MODO_HOME;
+        else if (strcmp(msg, "festa") == 0) novo_modo_solicitado = MODO_FESTA;
+        else if (strcmp(msg, "seguranca") == 0) novo_modo_solicitado = MODO_SEGURANCA;
+        else if (strcmp(msg, "leds") == 0) alternar_leds(state);
+
+        if (state->modo_atual != novo_modo_solicitado) {
+            set_modo(state, novo_modo_solicitado); // Chama a função de modos.c, passando o 'state'
+        }
+    } else {
+        INFO_printf(">> Comando não reconhecido\n");
     }
 }
+
 
 // Dados de entrada publicados
 static void mqtt_incoming_publish_cb(void *arg, const char *topic, u32_t tot_len) {
@@ -392,11 +293,31 @@ static void mqtt_incoming_publish_cb(void *arg, const char *topic, u32_t tot_len
     strncpy(state->topic, topic, sizeof(state->topic));
 }
 
-// Publicar temperatura
-static void temperature_worker_fn(async_context_t *context, async_at_time_worker_t *worker) {
-    MQTT_CLIENT_DATA_T* state = (MQTT_CLIENT_DATA_T*)worker->user_data;
-    publish_temperature(state);
-    async_context_add_at_time_worker_in_ms(context, worker, TEMP_WORKER_TIME_S * 1000);
+// Função para publicar o status do modo
+void publish_mode_status(MQTT_CLIENT_DATA_T *state) {
+    char topic_buf[MQTT_TOPIC_LEN];
+    snprintf(topic_buf, sizeof(topic_buf), "%s/status/modo", state->mqtt_client_info.client_id); // Ou um tópico fixo
+
+    char msg_buf[20];
+    switch (state->modo_atual) {
+        case MODO_HOME: strcpy(msg_buf, "home"); break;
+        case MODO_FESTA: strcpy(msg_buf, "festa"); break;
+        case MODO_SEGURANCA: strcpy(msg_buf, "seguranca"); break;
+        default: strcpy(msg_buf, "desconhecido"); break;
+    }
+    mqtt_publish(state->mqtt_client_inst, topic_buf, msg_buf, strlen(msg_buf), MQTT_PUBLISH_QOS, MQTT_PUBLISH_RETAIN, pub_request_cb, state);
+    INFO_printf("Publicado modo: %s em %s\n", msg_buf, topic_buf);
+}
+
+// Função para publicar o status do alarme
+void publish_alarm_status(MQTT_CLIENT_DATA_T *state) {
+    char topic_buf[MQTT_TOPIC_LEN];
+    snprintf(topic_buf, sizeof(topic_buf), "%s/status/alarme", state->mqtt_client_info.client_id); // Ou um tópico fixo
+
+    char *msg = state->alarme_ativo ? "intruso" : "ok";
+
+    mqtt_publish(state->mqtt_client_inst, topic_buf, msg, strlen(msg), MQTT_PUBLISH_QOS, MQTT_PUBLISH_RETAIN, pub_request_cb, state);
+    INFO_printf("Publicado status alarme: %s em %s\n", msg, topic_buf);
 }
 
 // Conexão MQTT
@@ -410,10 +331,6 @@ static void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection
         if (state->mqtt_client_info.will_topic) {
             mqtt_publish(state->mqtt_client_inst, state->mqtt_client_info.will_topic, "1", 1, MQTT_WILL_QOS, true, pub_request_cb, state);
         }
-
-        // Publish temperature every 10 sec if it's changed
-        temperature_worker.user_data = state;
-        async_context_add_at_time_worker_in_ms(cyw43_arch_async_context(), &temperature_worker, 0);
     } else if (status == MQTT_CONNECT_DISCONNECTED) {
         if (!state->connect_done) {
             panic("Failed to connect to mqtt server");
