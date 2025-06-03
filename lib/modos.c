@@ -17,10 +17,10 @@ void executar_modulo_modos(MQTT_CLIENT_DATA_T *state) {
     if (state->modo_atual == MODO_SEGURANCA && !state->alarme_ativo && detect_loud_noise()) {
         printf("Alarme ativado por ruído!\n");
         state->alarme_ativo = true;
-        
-        atualiza_display(state);  // Para resposta imediata
-        atualiza_matriz_leds(state); // Para resposta imediata
-        publish_alarm_status(state); // Publicar que há um intruso
+
+        atualiza_display(state);  
+        atualiza_matriz_leds(state); 
+        publish_alarm_status(state); 
     }
     alarme_loop(state);         
     animacao_festa_loop(state); 
@@ -70,10 +70,11 @@ void atualiza_buzzer(MQTT_CLIENT_DATA_T *state) {
 //Atualiza o display de acordo com o modo
 void atualiza_display(MQTT_CLIENT_DATA_T *state) {
     ssd1306_fill(&ssd, false);
-
+    ssd1306_rect(&ssd, 1,1,WIDTH-2, HEIGHT-2, true, false);
     char buffer_data[16];
     char buffer_hora[16];
-    // Se o modo for Segurança com alarme, mostrar "INTRUSO"
+    
+
     if (state->alarme_ativo) {
         ssd1306_draw_string(&ssd, "!!! INTRUSO !!!", 5, 30);
         ssd1306_send_data(&ssd);
@@ -83,13 +84,13 @@ void atualiza_display(MQTT_CLIENT_DATA_T *state) {
     // Nome do modo
     switch (state->modo_atual) {
         case MODO_HOME:
-            ssd1306_draw_string(&ssd, "Modo: Home", 28, 24);
+            ssd1306_draw_string(&ssd, "Modo: Home", 24, 28);
             break;
         case MODO_FESTA:
-            ssd1306_draw_string(&ssd, "Modo: Festa", 28, 20);
+            ssd1306_draw_string(&ssd, "Modo: Festa", 20, 28);
             break;
         case MODO_SEGURANCA:
-            ssd1306_draw_string(&ssd, "Modo: Seguranca", 28, 2);
+            ssd1306_draw_string(&ssd, "Modo: Seguranca", 4, 28);
             break;
         default:
             break;

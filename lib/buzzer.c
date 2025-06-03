@@ -58,7 +58,6 @@ void tocar_frequencia(int frequencia, int duracao_ms) {
     // Fórmula: wrap = 1_000_000 / frequência
     uint32_t wrap = 1000000 / frequencia;
     
-    printf("Tocando frequência %d Hz (wrap=%d)\n", frequencia, wrap);
     
     pwm_set_wrap(slice_num, wrap);
     pwm_set_chan_level(slice_num, channel, wrap / 2);
