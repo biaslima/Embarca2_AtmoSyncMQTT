@@ -8,11 +8,11 @@
 
 #include "setup.h"
 
-#define WIFI_SSID "BRENO-2G"                  
-#define WIFI_PASSWORD "991773729"      
-#define MQTT_SERVER "192.168.0.102"                
-#define MQTT_USERNAME "bia"     
-#define MQTT_PASSWORD "bibi123698745"     
+#define WIFI_SSID "rede wifi"                  
+#define WIFI_PASSWORD "senha do wifi"      
+#define MQTT_SERVER "seu ip"                
+#define MQTT_USERNAME "seu username"     
+#define MQTT_PASSWORD "sua senha"     
 
 #ifndef MQTT_SERVER
 #error Need to define MQTT_SERVER
